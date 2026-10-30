@@ -1,0 +1,177 @@
+---
+// src/components/MusicPlayer.astro
+// Put your files in /public/music/ and list them here.
+const tracks = [
+  { title: "Song title", artist: "Artist", src: "/music/song1.mp3", cover: "/music/cover1.jpg" },
+  // { title: "Another song", artist: "Artist", src: "/music/song2.mp3", cover: "/music/cover2.jpg" },
+];
+---
+
+<div id="player" transition:persist data-tracks={JSON.stringify(tracks)}>
+  <img id="p-cover" class="cover" alt="Album cover" width="52" height="52" />
+
+  <div class="main">
+    <div id="p-title" class="title"></div>
+    <div class="row">
+      <span id="p-cur" class="time">0:00</span>
+      <input id="p-seek" type="range" min="0" max="1000" value="0" aria-label="Seek" />
+      <span id="p-dur" class="time">0:00</span>
+    </div>
+  </div>
+
+  <div class="ctrl">
+    <button id="p-prev" aria-label="Previous / restart">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14L9.5 12z" /></svg>
+    </button>
+    <button id="p-play" aria-label="Play">
+      <svg id="i-play" viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M7 4.5v15l13-7.5z" /></svg>
+      <svg id="i-pause" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" hidden><path d="M6 4h4v16H6zM14 4h4v16h-4z" /></svg>
+    </button>
+    <button id="p-next" aria-label="Next">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M16 5h2v14h-2zM4 5v14l10.5-7z" /></svg>
+    </button>
+  </div>
+
+  <audio id="p-audio" preload="metadata"></audio>
+</div>
+
+<style>
+  #player {
+    position: fixed;
+    top: max(16px, env(safe-area-inset-top));
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(440px, calc(100vw - 24px));
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 16px;
+    border-radius: 18px;
+    color: #eef2f6;
+    background: rgba(16, 20, 26, 0.7);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    z-index: 50;
+    font-size: 14px;
+  }
+  .cover { width: 52px; height: 52px; border-radius: 8px; object-fit: cover; flex: none; background: #222; }
+  .main { flex: 1; min-width: 0; }
+  .title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .time { font-size: 12px; opacity: 0.6; font-variant-numeric: tabular-nums; min-width: 32px; }
+  .time:last-child { text-align: right; }
+
+  input[type="range"] {
+    --p: 0%;
+    flex: 1;
+    min-width: 0;
+    height: 14px;
+    background: transparent;
+    -webkit-appearance: none;
+    appearance: none;
+    cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 2px; border-radius: 2px;
+    background: linear-gradient(to right, #fff var(--p), rgba(255,255,255,.25) var(--p));
+  }
+  input[type="range"]::-moz-range-track { height: 2px; background: rgba(255,255,255,.25); }
+  input[type="range"]::-moz-range-progress { height: 2px; background: #fff; }
+  input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 0; height: 0; }
+  input[type="range"]:hover::-webkit-slider-thumb { width: 10px; height: 10px; margin-top: -4px; border-radius: 50%; background: #fff; }
+  input[type="range"]::-moz-range-thumb { width: 0; height: 0; border: 0; }
+  input[type="range"]:hover::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%; background: #fff; }
+
+  .ctrl { display: flex; align-items: center; gap: 4px; flex: none; }
+  .ctrl button {
+    display: grid; place-items: center;
+    width: 34px; height: 34px;
+    border: 0; border-radius: 50%;
+    background: transparent; color: inherit; cursor: pointer;
+    opacity: 0.75; transition: opacity 0.15s, transform 0.15s;
+  }
+  .ctrl button:hover { opacity: 1; }
+  .ctrl button:active { transform: scale(0.92); }
+  .ctrl button:focus-visible, input[type="range"]:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  #p-play { opacity: 1; }
+</style>
+
+<script>
+  const root = document.getElementById("player")!;
+  const tracks = JSON.parse(root.dataset.tracks || "[]");
+  const $ = (id: string) => document.getElementById(id)!;
+
+  const audio = $("p-audio") as HTMLAudioElement;
+  const cover = $("p-cover") as HTMLImageElement;
+  const title = $("p-title");
+  const seek = $("p-seek") as HTMLInputElement;
+  const cur = $("p-cur");
+  const dur = $("p-dur");
+  const playBtn = $("p-play");
+  const iPlay = $("i-play");
+  const iPause = $("i-pause");
+
+  let i = 0;
+  let dragging = false;
+
+  const fmt = (s: number) =>
+    isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : "0:00";
+
+  function setProgress(frac: number) {
+    seek.value = String(Math.round(frac * 1000));
+    seek.style.setProperty("--p", `${frac * 100}%`);
+  }
+
+  function load(n: number, autoplay = false) {
+    if (!tracks.length) return;
+    i = (n + tracks.length) % tracks.length;
+    const t = tracks[i];
+    audio.src = t.src;
+    cover.src = t.cover;
+    title.textContent = t.artist ? `${t.title} — ${t.artist}` : t.title;
+    setProgress(0);
+    cur.textContent = "0:00";
+    dur.textContent = "0:00";
+    if (autoplay) audio.play().catch(() => {});
+  }
+
+  const toggle = () => (audio.paused ? audio.play().catch(() => {}) : audio.pause());
+
+  playBtn.addEventListener("click", toggle);
+  $("p-next").addEventListener("click", () => load(i + 1, !audio.paused));
+  // Previous: restart the song if you're more than 3s in, otherwise go back a track
+  $("p-prev").addEventListener("click", () =>
+    audio.currentTime > 3 ? (audio.currentTime = 0) : load(i - 1, !audio.paused)
+  );
+
+  audio.addEventListener("play", () => {
+    iPlay.hidden = true; iPause.hidden = false; playBtn.setAttribute("aria-label", "Pause");
+  });
+  audio.addEventListener("pause", () => {
+    iPlay.hidden = false; iPause.hidden = true; playBtn.setAttribute("aria-label", "Play");
+  });
+  audio.addEventListener("loadedmetadata", () => (dur.textContent = fmt(audio.duration)));
+  audio.addEventListener("timeupdate", () => {
+    if (dragging || !audio.duration) return;
+    setProgress(audio.currentTime / audio.duration);
+    cur.textContent = fmt(audio.currentTime);
+  });
+  audio.addEventListener("ended", () => load(i + 1, true));
+
+  seek.addEventListener("pointerdown", () => (dragging = true));
+  seek.addEventListener("input", () => {
+    const frac = Number(seek.value) / 1000;
+    seek.style.setProperty("--p", `${frac * 100}%`);
+    cur.textContent = fmt(frac * (audio.duration || 0));
+  });
+  seek.addEventListener("change", () => {
+    if (audio.duration) audio.currentTime = (Number(seek.value) / 1000) * audio.duration;
+    dragging = false;
+  });
+
+  // Lets an "Enter" button elsewhere on the site start the music: window.dispatchEvent(new Event("player:play"))
+  window.addEventListener("player:play", () => audio.play().catch(() => {}));
+
+  load(0);
+</script>
